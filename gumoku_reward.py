@@ -101,69 +101,97 @@ class GumokuReward:
         return yes
 
     @staticmethod
-    def scan_chunk(chk, thres=2, empty_edge_add=2, winrwd=10, win_n=5):  # Todo: delete
-        '''
-        :param chk: a chunk: 1d array or list
-        :param thres: a threshold
-        :param winrwd: the extra score to add if there are at least win_n consecutive pieces
-        :param win_n: number of consecutive pieces to win
-        :return: score of the chunk to topup
-        '''
-        consec_chk = list(GumokuReward.yield_chunks(chk, 0, lencut=1))  # get consecutive pieces
-        addscore = 0
-        if len(consec_chk) > 0:
-            max_len = 0
-            for c in consec_chk:
-                if len(c) >= thres:
-                    addscore += len(c)
-                if len(c) > max_len:
-                    max_len = len(c)
-            if (chk[0] == 0) & (len(consec_chk[0]) > thres):
-                addscore += empty_edge_add
-            if (chk[-1] == 0) & (len(consec_chk[-1]) > thres):
-                addscore += empty_edge_add
-            if max_len >= win_n:
-                addscore += winrwd
-        return addscore
+    def is_sublist(subl, l):
+        """
+        :param subl: the shorter list
+        :param l: the longer list
+        :return: boolean: if subl is a sublist of l
+        """
+        result = False
+        sub_len = len(subl)
+        for i in range(len(l)):
+            if l[i:i+sub_len] == subl:
+                result = True
+                break
+        return result
 
     @staticmethod
-    def scan_sequence(l1, l2, _id, winrwd=10, defensive=2):
+    def chunk_danger(chk, _id):
         """
-        :param l1: the sequence: np 1d array with 0 (available), and player ids
+        :param chk: list or 1d array formed by 0 and / or _id
+        :param _id:
+        :return: score of danger
+                 it's dangerous when:
+                 1. at least one 3 consecutive _id with 2 open ends,
+                    and chk length > 5:
+                        eg: [0, 1, 1, 1, 0, 0] or [1, 0, 0, 1, 1, 1, 0, 0, 1, 1]
+                 2. 1 gap between 2 separate consecutive _id, with sum of length >= 3,
+                    with 2 open ends, and chk length > 5:
+                        eg: [0, 1, 1, 0, 1, 0] or [0, 0, 1, 0, 1, 1, 0]
+                 3. at least one 4 consecutive _id, with at least 1 empty edge,
+                    and chk length >= 5:
+                        eg: [0, 1, 1, 1, 1] or [0, 1, 1, 1, 1, 0]
+                 4. 1 gap between 2 separate consecutive _id, with sum of length >= 4, with at least 1 empty edge,
+                    and chk length >= 5:
+                        eg: [1, 1, 0, 1, 1] or [0, 1, 1, 0, 1, 1]
+        """
+        danger = 0
+        if len(chk) > 5:
+            #print('Rule 1')
+            if GumokuReward.is_sublist([0, _id, _id, _id, 0, 0], list(chk)) | \
+                    GumokuReward.is_sublist([0, 0, _id, _id, _id, 0], list(chk)):
+                danger += 1
+            #print('Rule 2')
+            if GumokuReward.is_sublist([0, _id, _id, 0, _id, 0], list(chk)) | \
+                    GumokuReward.is_sublist([0, _id, 0, _id, _id, 0], list(chk)):
+                danger += 1
+        if len(chk) >= 5:
+            #print('Rule 3')
+            if GumokuReward.is_sublist([0, _id, _id, _id, _id], list(chk)) | \
+                    GumokuReward.is_sublist([_id, _id, _id, _id, 0], list(chk)):
+                danger += 1
+            #print('Rule 4')
+            if GumokuReward.is_sublist([_id, _id, 0, _id, _id], list(chk)) | \
+                    GumokuReward.is_sublist([_id, _id, _id, 0, _id], list(chk)) | \
+                    GumokuReward.is_sublist([_id, 0, _id, _id, _id], list(chk)):
+                danger += 1
+        return danger
+
+    @staticmethod
+    def scan_sequence(l1, l2, _id, winrwd=10):
+        """
+        :param l1: the sequence: np 1d array with 0 (available), and player ids, the previous sequence
+        :param l2: the sequence: np 1d array with 0 (available), and player ids, the next sequence (after action)
         :param _id: the player id (refer to PLAYERS)
         :param winrwd: the extra score to add if win / deduct if lose
-        :param defensive: the score to be deducted for every 3 connected opponent with empty edge in l1 as well as l2
-                        larger value leads to a more defensive play
         :return: score of the sequence for _id (the player)
         """
-        # _id = 0.5
-        #l1=np.array([0, 0, 1, 1, 1, 0, 0, 0, 0, 0.5, 0, 1, 1, 1, 0, 0, 0])
-        #l2=np.array([0, 0, 1, 1, 1, 0.5, 0, 0, 0, 0.5, 0, 1, 1, 1, 0, 0, 0])
-
-        #l1=np.array([0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0.5, 0, 1, 1, 1, 0, 0, 0])
-        #l2=np.array([0, 0, 1, 1, 1, 0.5, 1, 1, 0, 0, 0, 0.5, 0, 1, 1, 1, 0, 0, 0])
-
         op = list(set(PLAYERS.values()) - {_id})[0]  # the opponent
         score = 0
-        action_pos = np.where(l2 - l1 > 0)[0][0]
 
-        # Rule 1. get all the chunks with length >= 5 on l1 (separated by _id),
-        #           for every chunk: deduct marks according to scan_chunk
-        chks_op_1 = list(GumokuReward.yield_chunks(l1, _id, lencut=5))
+        # Rule 1: get all the chunks with length >= 5 on l2 (separated by _id),
+        #           for every chunk: deduct marks according to chunk_danger
+        chks_op_1 = list(GumokuReward.yield_chunks(l1, _id, lencut=5))  # scan the previous sequence
+        for c in chks_op_1:
+            score -= GumokuReward.chunk_danger(c, op)
+        chks_op_2 = list(GumokuReward.yield_chunks(l2, _id, lencut=5))  # if the next sequence doesn't decrease dangerousity, punish
+        for c in chks_op_2:
+            score -= GumokuReward.chunk_danger(c, op)
 
-        tmp = l1.copy()
-        tmp[action_pos] = -1
-        list(GumokuReward.yield_chunks(tmp, _id, lencut=5))
+        # Rule 2: get all the chunks with length >= 5 on l2 (separated by op),
+        #           for every chunk, add marks according to chunk_danger
+        chks_id_1 = list(GumokuReward.yield_chunks(l1, op, lencut=5))
+        for c in chks_id_1:
+            score += GumokuReward.chunk_danger(c, _id)
+        chks_id_2 = list(GumokuReward.yield_chunks(l2, op, lencut=5))
+        for c in chks_id_2:
+            score += GumokuReward.chunk_danger(c, _id)
+
+        # Rule 3: check win
 
 
-        for c in chks_op:
-            score -= GumokuReward.scan_chunk(c, thres=2, empty_edge_add=2, winrwd=winrwd, win_n=5)
 
-        # Rule 2. get all the chunks with length >= 5 on l(separated by op),
-        #           for every chunk, add marks according to scan_chunk
-        chks_id = list(GumokuReward.yield_chunks(l, op, lencut=5))
-        for c in chks_id:
-            score += GumokuReward.scan_chunk(c, thres=2, empty_edge_add=2, winrwd=winrwd, win_n=5)
+
 
         return score
 
