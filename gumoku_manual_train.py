@@ -229,7 +229,7 @@ class GumokuManualTrain(GumokuUI, object):  # human vs human
                 coord_y = -1
 
                 # calculate reward ----------
-                reward = GumokuReward.cal_reward(next_state, PLAYERS[self.player], winrwd=10, defensive=2)
+                reward = GumokuReward.cal_reward(next_state, PLAYERS[self.player], winrwd=10, defensive=1.5)
                 self.episode_rwd.append(reward)
                 self.players_reward[self.player].append(reward)
 

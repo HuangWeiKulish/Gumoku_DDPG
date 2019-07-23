@@ -158,41 +158,60 @@ class GumokuReward:
         return danger
 
     @staticmethod
-    def scan_sequence(l1, l2, _id, winrwd=10):
+    def scan_sequence(l1, l2, _id, winrwd=10, defensive=1.5):
         """
         :param l1: the sequence: np 1d array with 0 (available), and player ids, the previous sequence
         :param l2: the sequence: np 1d array with 0 (available), and player ids, the next sequence (after action)
         :param _id: the player id (refer to PLAYERS)
         :param winrwd: the extra score to add if win / deduct if lose
+        :param defensive: larger value make it more defensive (weight 'not to lose' more than 'win')
         :return: score of the sequence for _id (the player)
         """
         op = list(set(PLAYERS.values()) - {_id})[0]  # the opponent
         score = 0
 
         # Rule 1: get all the chunks with length >= 5 on l2 (separated by _id),
-        #           for every chunk: deduct marks according to chunk_danger
+        #           for every chunk: deduct marks according to danger score
+        l1_danger, l2_danger = 0, 0
         chks_op_1 = list(GumokuReward.yield_chunks(l1, _id, lencut=5))  # scan the previous sequence
         for c in chks_op_1:
-            score -= GumokuReward.chunk_danger(c, op)
+            l1_danger += GumokuReward.chunk_danger(c, op)
         chks_op_2 = list(GumokuReward.yield_chunks(l2, _id, lencut=5))  # if the next sequence doesn't decrease dangerousity, punish
         for c in chks_op_2:
-            score -= GumokuReward.chunk_danger(c, op)
+            l2_danger += GumokuReward.chunk_danger(c, op)
+
+        if l1_danger == 0:
+            if l2_danger > 0:
+                score -= defensive  # no penalty if l2_danger == 0
+        else:  # l1_danger > 0
+            if l2_danger > l1_danger:
+                score -= 2*defensive
+            elif 0 < l2_danger <= l1_danger:
+                score -= defensive
+            else:  # l2_danger == 0
+                score += 2*defensive
 
         # Rule 2: get all the chunks with length >= 5 on l2 (separated by op),
-        #           for every chunk, add marks according to chunk_danger
+        #           for every chunk, add marks according to danger score
+        l1_favor, l2_favor = 0, 0
         chks_id_1 = list(GumokuReward.yield_chunks(l1, op, lencut=5))
         for c in chks_id_1:
-            score += GumokuReward.chunk_danger(c, _id)
+            l1_favor += GumokuReward.chunk_danger(c, _id)
         chks_id_2 = list(GumokuReward.yield_chunks(l2, op, lencut=5))
         for c in chks_id_2:
-            score += GumokuReward.chunk_danger(c, _id)
+            l2_favor += GumokuReward.chunk_danger(c, _id)
 
-        # Rule 3: check win
+        if l2_favor > l1_favor:
+            if l1_favor == 0:
+                score += 1
+            else:  # l1_favor > 0
+                score += 2
 
-
-
-
-
+        # Rule 3: check win:
+        if GumokuReward.check5_seq(l2, _id, consec=5):
+            score += winrwd
+        if GumokuReward.check5_seq(l2, op, consec=5):
+            score -= winrwd
         return score
 
     @staticmethod
@@ -204,48 +223,43 @@ class GumokuReward:
         return len(np.where(state != 0)[0]) / (state.shape[0]*state.shape[1])
 
     @staticmethod
-    def cal_reward(state, _id, winrwd=10, defensive=2):  # Todo: force the reward to fixed range?????????
+    def cal_reward(state, state_next, _id, winrwd=10, defensive=1.5):  # Todo: force the reward to fixed range?????????
+        # Todo: in this way, there will only be reward if at least 3 same pieces have been placed (at least 6 steps)
         """
         :param state: np 2d array format (N_GRIDS-1, N_GRIDS-1)
+        :param state_next: np 2d array format (N_GRIDS-1, N_GRIDS-1)
         :param _id: the id of player (refer to PLAYERS table)
         :param winrwd: the extra score to add if win / deduct if lose
-        :param defensive: larger value leads to a more defensive play
+        :param defensive: larger value make it more defensive (weight 'not to lose' more than 'win')
         :return: the total reward yielded by the action
         """
         reward = 0
         # scan the entire state
         # print('horizontal scan')
         for i in range(state.shape[0]):
-            reward += GumokuReward.scan_sequence(state[i, :], _id, winrwd, defensive)
+            reward += GumokuReward.scan_sequence(state[i, :], state_next[i, :], _id, winrwd, defensive)
         # print('vertical scan')
         for i in range(state.shape[1]):
-            reward += GumokuReward.scan_sequence(state[:, i], _id, winrwd, defensive)
+            reward += GumokuReward.scan_sequence(state[:, i], state_next[i, :], _id, winrwd, defensive)
         # print('diagonal and reverse scan')
         # left side
         for i in range(state.shape[0]):
             diag, revdiag = GumokuReward.get_diag(state, [i, 0])
-            reward += GumokuReward.scan_sequence(diag, _id, winrwd, defensive)
-            reward += GumokuReward.scan_sequence(revdiag, _id, winrwd, defensive)
+            diag_next, revdiag_next = GumokuReward.get_diag(state_next, [i, 0])
+            reward += GumokuReward.scan_sequence(diag, diag_next, _id, winrwd, defensive)
+            reward += GumokuReward.scan_sequence(revdiag, revdiag_next, _id, winrwd, defensive)
         # right
         for i in range(state.shape[0]):
             diag, revdiag = GumokuReward.get_diag(state, [i, state.shape[1]-1])
+            diag_next, revdiag_next = GumokuReward.get_diag(state_next, [i, state_next.shape[1]-1])
             if i == 0:
-                reward += GumokuReward.scan_sequence(diag, _id, winrwd, defensive)
+                reward += GumokuReward.scan_sequence(diag, diag_next, _id, winrwd, defensive)
             elif i == state.shape[0]-1:
-                reward += GumokuReward.scan_sequence(revdiag, _id, winrwd, defensive)
+                reward += GumokuReward.scan_sequence(revdiag, revdiag_next, _id, winrwd, defensive)
             else:
-                reward += GumokuReward.scan_sequence(diag, _id, winrwd, defensive)
-                reward += GumokuReward.scan_sequence(revdiag, _id, winrwd, defensive)
-
-        '''
-        factor = GumokuReward.get_n_used_locs(state)
-        factor = 1.0/(state.shape[0]*state.shape[1]) if factor == 0.0 else factor  # force it to be positive
-        if reward > 0:
-            reward = reward / factor  # penalise if too many steps done before game over
-        else:  # when reward is negative
-            reward = reward * factor
-        '''
-        return reward  # Todo: force reward to be positive??????????????
+                reward += GumokuReward.scan_sequence(diag, diag_next, _id, winrwd, defensive)
+                reward += GumokuReward.scan_sequence(revdiag, revdiag_next, _id, winrwd, defensive)
+        return reward
 
     @staticmethod
     def check_win(state, loc, _id, consec=5):

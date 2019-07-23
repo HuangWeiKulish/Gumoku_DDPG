@@ -18,11 +18,14 @@ PLAYERS = {'white': 0.5, 'black': 1}
 
 class OffPolicyTraining(object):
 
-    def __int__(self, file_dir, n_grids=N_GRIDS, continue_train=True, sample_size=10**4, use_ui=True,
-                verbose=0, epoch=50,  actor_name='gumoku_actor.h5', critic_name='gumoku_critic.h5', gamma=0.95,
-                actor_nfilter=3, actor_kernalsize=5, actor_poolsize=(2, 2), actor_lr=0.001,  # actor_tau=0.35,
-                critic_nfilter=3, critic_kernalsize=5, critic_poolsize=(2, 2), critic_lr=0.001):  # critic_tau=0.35
-
+    def __init__(self, file_dir, n_grids=N_GRIDS, continue_train=True, sample_size=10**4, use_ui=True,
+                 verbose=1, epoch=50, actor_name='gumoku_actor.h5', critic_name='gumoku_critic.h5', gamma=0.95,
+                 actor_nfilter=3, actor_kernalsize=5, actor_poolsize=(2, 2), actor_lr=0.001,  # actor_tau=0.35,
+                 critic_nfilter=3, critic_kernalsize=5, critic_poolsize=(2, 2), critic_lr=0.001):  # critic_tau=0.35
+        self.model_dir = os.path.join(file_dir, "models")
+        self.continue_train = continue_train
+        self.verbose = verbose
+        self.epoch = epoch
         self.n_grids = n_grids
         self.actor_name, self.critic_name = actor_name, critic_name
         self.actor_nfilter, self.actor_kernalsize, self.actor_poolsize, self.actor_lr = \
@@ -153,44 +156,135 @@ class OffPolicyTraining(object):
         state, action, next_state = OffPolicyTraining.generate_random_partial_sample(
             n_grids, n_used_locs, action_loc, win_action)
         if output_reward:
-            reward = GumokuReward.cal_reward(next_state, PLAYERS['white'], winrwd=10, defensive=2)
+            reward = GumokuReward.cal_reward(state, next_state, PLAYERS['white'], winrwd=10, defensive=1.5)
         else:
             reward = None
         return state, action, reward, next_state
 
-
-
-
     @staticmethod
-    def generate_complete_samples(n_samples, n_grids, n_used_locs, action_loc=False):
+    def generate_complete_samples(n_samples, n_grids, n_used_locs, action_loc=False, win_action=False):
         """
         :param n_samples: number of samples to generate
         :param n_grids:
         :param n_used_locs: number of n used locations (before the action)
         :param action_loc: if True, action will be in for of [loc_x, loc_y], else it will be 1d array
-        :return: a list of lists of complete samples [state, action, reward, next_state, done]
+        :param win_action: if True, generate action that leads to win
+        :return: (state list, action list, reward list, next_state list, done list)
         """
+        s_t, a_t, r_t, snext_t, d_t = [], [], [], [], []
+        for i in range(n_samples):
+            s, a, r, s_next = OffPolicyTraining.generate_random_complete_sample(
+                n_grids, n_used_locs, action_loc, output_reward=True, win_action=win_action)
+            if win_action:
+                d = 1
+            elif (not win_action) & (len(np.where(s_next == 0)[0]) == 0):
+                d = 1
+            else:
+                d = 0
+            s_t.append(s)
+            a_t.append(a)
+            r_t.append(r)
+            snext_t.append(s_next)
+            d_t.append(d)
+        return s_t, a_t, r_t, s_next, d_t
 
-        #GumokuReward.cal_reward(next_state, _id, winrwd=10, defensive=self.defensive)
-        pass
+    @staticmethod
+    def save_samples(file, dir):
+        file_base_name = 'gumoku_random_samples_'
+        all_files = glob.glob(os.path.join(dir, file_base_name+"*.pkl"))
+        if len(all_files) > 0:
+            last_ver = max([int(os.path.basename(f).replace(file_base_name, '').replace('.pkl', ''))
+                            for f in all_files])
+        else:
+            last_ver = -1
+        new_file_name = file_base_name + str(last_ver+1) + '.pkl'
+        pkl.dump(file, open(os.path.join(dir, new_file_name), 'wb'))
+
+    def train_critic(self, samples):
+        """
+        :param samples: (state list, action list, reward list, next_state list, done list)
+                        actions are 1d arrays
+        """
+        s_t, a_t, r_t, s_next, d_t = samples
+        self.critic_nn = Critic(model_name=self.critic_name, model_dir=self.model_dir, n_grids=self.n_grids,
+                                n_filter=self.critic_nfilter, kernal_size=self.critic_kernalsize,
+                                poolsize=self.critic_poolsize, lr=self.critic_lr, tau=0.3,
+                                continue_train=self.continue_train, verbose=self.verbose, epoch=self.epoch)
+        print(self.critic_nn.eval_model.summary())
+        self.critic_nn.train_eval_nn(s_t, a_t, r_t)
+
+        crtic_mse = self.critic_nn.cal_mse(s_t, a_t, r_t, model_type='eval')
+        print("Critic MSE = {0:.2f}".format(crtic_mse))
+
+    def train_actor(self, samples):
+        """
+        :param samples: (state list, action list, reward list, next_state list, done list)
+                        actions are 1d arrays
+        """
+        s_t, a_t, r_t, s_next, d_t = samples
+        self.actor_nn = Actor(model_name=self.actor_name, model_dir=self.model_dir, n_grids=self.n_grids,
+                              n_filter=self.actor_nfilter, kernal_size=self.actor_kernalsize,
+                              poolsize=self.actor_poolsize, lr=self.actor_lr, tau=0.3,
+                              continue_train=self.continue_train)
+        print(self.actor_nn.eval_model.summary())
+        a_for_grad = self.actor_nn.target_pred(s_t, model_type='eval', loc_out=False)
+        grads = self.critic_nn.gradients(s_t, a_for_grad)[0]  # shape = (number samples, model output length)
+        self.actor_nn.train_eval_with_grads(s_t, grads)  # update eval model
+
+        actor_mse = self.actor_nn.cal_mse(s_t, a_t, model_type='eval')
+        print("Actor MSE = {0:.2f}".format(actor_mse))
+
+    def critic_predict(self, samples):
+        """
+        :param samples: (state list, action list, reward list, next_state list, done list)
+                        actions are 1d arrays
+        :return:
+        """
+        s_t, a_t, r_t, s_next, d_t = samples
+        r_pred = self.critic_nn.target_pred(s_t, a_t, model_type='eval')
+        mse = ((np.array(r_t) - r_pred)**2).mean()
+        return {'pred': r_pred, 'mse': mse}
+
+    def save_critic(self, save_new=True):
+        model_name = self.critic_name
+        if save_new:
+            file_base_name = model_name.replace('.h5', '')
+            all_files = glob.glob(os.path.join(self.model_dir, file_base_name+"*.h5"))
+            if len(all_files) > 0:
+                last_ver = max([int(os.path.basename(f).replace(file_base_name, '').replace('.h5', ''))
+                                for f in all_files])
+            else:
+                last_ver = -1
+            model_name = file_base_name + str(last_ver+1) + '.h5'
+        self.critic_nn.save(self.model_dir, model_name)
+
+    def save_actor(self, save_new=True):
+        model_name = self.actor_name
+        if save_new:
+            file_base_name = model_name.replace('.h5', '')
+            all_files = glob.glob(os.path.join(self.model_dir, file_base_name+"*.h5"))
+            if len(all_files) > 0:
+                last_ver = max([int(os.path.basename(f).replace(file_base_name, '').replace('.h5', ''))
+                                for f in all_files])
+            else:
+                last_ver = -1
+            model_name = file_base_name + str(last_ver+1) + '.h5'
+        self.actor_nn.save(self.model_dir, model_name)
 
 
+# test
+'''
 
 
+'''
+tr = OffPolicyTraining(file_dir=os.path.join(os.getcwd(), 'RL', 'Gumoku_DDPG'), verbose=1, epoch=50)
+samples = tr.generate_complete_samples(1000, N_GRIDS, 30, action_loc=False, win_action=False)
+#s_t, a_t, r_t, snext_t, d_t = samples
+#s_t[7]
+tr.train_critic(samples)
 
-    def select_samples(self):
-        pass
+test_samples = tr.generate_complete_samples(100, N_GRIDS, 30, action_loc=False, win_action=False)
+s_t, a_t, r_t, snext_t, d_t = test_samples
+tr.critic_nn.cal_mse(s_t, a_t, r_t, model_type='eval')
 
-    def save_samples(self):
-        pass
-
-    def save_models(self, save_critic=True, save_actor=True):
-        pass
-
-    def train_critic(self):
-        pass
-
-    def predict(self):
-        pass
-
-
+tr.save_critic()
