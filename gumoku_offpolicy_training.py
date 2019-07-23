@@ -272,11 +272,10 @@ class OffPolicyTraining(object):
         self.actor_nn.save(self.model_dir, model_name)
 
 
+
+'''
 # test
-'''
 
-
-'''
 tr = OffPolicyTraining(file_dir=os.path.join(os.getcwd(), 'RL', 'Gumoku_DDPG'), verbose=1, epoch=50)
 samples = tr.generate_complete_samples(1000, N_GRIDS, 30, action_loc=False, win_action=False)
 #s_t, a_t, r_t, snext_t, d_t = samples
@@ -288,3 +287,6 @@ s_t, a_t, r_t, snext_t, d_t = test_samples
 tr.critic_nn.cal_mse(s_t, a_t, r_t, model_type='eval')
 
 tr.save_critic()
+
+'''
+

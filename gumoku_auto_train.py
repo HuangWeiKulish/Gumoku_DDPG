@@ -376,7 +376,7 @@ class GumokuAutoTrain(object):
                 else:
                     pass  # self.winner is None
 
-                reward = GumokuReward.cal_reward(next_state, _id, winrwd=10, defensive=self.defensive)
+                reward = GumokuReward.cal_reward(current_state, next_state, _id, winrwd=10, defensive=self.defensive)
                 all_rwds.append(reward)  # Todo: is it the best measurement? Any other better indicator?
 
                 # append record to replay_buffer ---------------------
